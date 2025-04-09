@@ -1,5 +1,5 @@
 import React, { useState, useEffect, ChangeEvent, KeyboardEvent } from 'react';
-import { Box, Paper, TextField, Button, Typography, Grid } from '@mui/material';
+import { Box, Paper, TextField, Button, Typography, Grid, CircularProgress } from '@mui/material';
 
 interface Message {
   type: 'user' | 'agent';
@@ -7,9 +7,119 @@ interface Message {
   timestamp: string;
 }
 
+interface UnityConfig {
+  dataUrl: string;
+  frameworkUrl: string;
+  codeUrl: string;
+  streamingAssetsUrl: string;
+  companyName: string;
+  productName: string;
+  productVersion: string;
+}
+
+declare global {
+  interface Window {
+    createUnityInstance: (
+      canvas: HTMLCanvasElement,
+      config: UnityConfig,
+      onProgress?: (progress: number) => void
+    ) => Promise<any>;
+    unityInstance: any;
+  }
+}
+
 const SimulationPage = (): JSX.Element => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
+  const [unityLoaded, setUnityLoaded] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [unityError, setUnityError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadUnityScript = () => {
+      return new Promise<void>((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = '/unity/Build/v4.loader.js';
+        script.async = false;
+        script.onload = () => {
+          // 等待Unity加载器初始化
+          const checkUnityInstance = () => {
+            if (typeof (window as any).createUnityInstance === 'function') {
+              console.log('Unity loader script loaded and initialized');
+              resolve();
+            } else {
+              console.log('Waiting for Unity loader to initialize...');
+              setTimeout(checkUnityInstance, 100);
+            }
+          };
+          checkUnityInstance();
+        };
+        script.onerror = (error) => {
+          console.error('Error loading Unity loader script:', error);
+          reject(new Error('Failed to load Unity loader script'));
+        };
+        document.body.appendChild(script);
+      });
+    };
+
+    const initUnity = async () => {
+      try {
+        console.log('Starting Unity initialization...');
+        await loadUnityScript();
+        console.log('Unity loader script loaded, proceeding with initialization...');
+
+        const canvas = document.querySelector("#unity-canvas") as HTMLCanvasElement;
+        if (!canvas) {
+          throw new Error("Cannot find Unity canvas element");
+        }
+
+        const config = {
+          dataUrl: "/unity/Build/v4.data",
+          frameworkUrl: "/unity/Build/v4.framework.js",
+          codeUrl: "/unity/Build/v4.wasm",
+          streamingAssetsUrl: "StreamingAssets",
+          companyName: "DefaultCompany",
+          productName: "fwwb_ai_agent",
+          productVersion: "1.0",
+          showBanner: (msg: string, type: string) => {
+            console.log(`Unity Banner: ${msg} (${type})`);
+          }
+        };
+
+        console.log('Unity configuration:', config);
+
+        if (typeof (window as any).createUnityInstance !== 'function') {
+          console.error('createUnityInstance is not available');
+          throw new Error('Unity loader script did not properly initialize');
+        }
+
+        console.log('Creating Unity instance...');
+        const unityInstance = await (window as any).createUnityInstance(
+          canvas,
+          config,
+          (progress: number) => {
+            console.log('Unity loading progress:', progress);
+            setLoadingProgress(Math.round(progress * 100));
+          }
+        );
+
+        console.log('Unity instance created successfully');
+        (window as any).unityInstance = unityInstance;
+        setUnityLoaded(true);
+      } catch (error) {
+        console.error('Unity initialization error:', error);
+        setUnityError(error instanceof Error ? error.message : 'Failed to load Unity content');
+      }
+    };
+
+    initUnity();
+
+    return () => {
+      if (window.unityInstance) {
+        window.unityInstance.Quit();
+      }
+    };
+  }, []);
 
   const handleSendMessage = () => {
     if (!input.trim()) return;
@@ -24,7 +134,6 @@ const SimulationPage = (): JSX.Element => {
     setInput('');
 
     // 这里将来需要与Unity和Agent系统集成
-    // 模拟Agent响应
     setTimeout(() => {
       const agentResponse: Message = {
         type: 'agent',
@@ -139,14 +248,44 @@ const SimulationPage = (): JSX.Element => {
             sx={{
               height: '100%',
               display: 'flex',
+              flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: '#f5f5f5',
+              backgroundColor: '#1a1a1a',
+              position: 'relative',
+              overflow: 'hidden',
             }}
           >
-            <Typography variant="h6" color="text.secondary">
-              Unity场景将在这里展示
-            </Typography>
+            {!unityLoaded && !unityError && (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  textAlign: 'center',
+                  color: 'white',
+                }}
+              >
+                <CircularProgress />
+                <Typography variant="h6" sx={{ mt: 2 }}>
+                  Unity加载中... {loadingProgress}%
+                </Typography>
+              </Box>
+            )}
+            {unityError && (
+              <Typography variant="h6" color="error" align="center">
+                {unityError}
+              </Typography>
+            )}
+            <canvas
+              id="unity-canvas"
+              style={{
+                width: '100%',
+                height: '100%',
+                display: unityLoaded ? 'block' : 'none',
+              }}
+            />
           </Paper>
         </Grid>
       </Grid>
